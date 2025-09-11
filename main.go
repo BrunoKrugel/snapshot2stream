@@ -30,18 +30,19 @@ func main() {
 
 	// Register handlers
 	for name, url := range cameras {
-		name, url := name, url
-		http.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
-			streamCameraWithResty(w, r, client, url)
-		})
-		log.Printf("Camera endpoint ready: http://localhost:8081/%s", name)
+		func(cameraName, cameraURL string) {
+			http.HandleFunc("/"+cameraName, func(w http.ResponseWriter, r *http.Request) {
+				streamCamera(w, r, client, cameraURL)
+			})
+			log.Printf("Camera endpoint ready: http://localhost:8081/%s", cameraName)
+		}(name, url)
 	}
 
 	log.Println("MJPEG server listening on :8081")
 	log.Fatal(http.ListenAndServe(":8081", nil))
 }
 
-func streamCameraWithResty(w http.ResponseWriter, r *http.Request, client *client.Client, cameraUrl string) {
+func streamCamera(w http.ResponseWriter, r *http.Request, client *client.Client, cameraUrl string) {
 	// MJPEG headers
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 
