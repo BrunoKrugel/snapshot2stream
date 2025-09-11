@@ -17,14 +17,19 @@ type Client struct {
 func NewRestyClient(cfg *config.Config) *Client {
 
 	restyClient := resty.New().
-		SetTimeout(15*time.Second).
+		SetTimeout(5*time.Second).
 		SetHeader("User-Agent", "app/1 CFNetwork/3826.600.41 Darwin/24.6.0").
-		SetHeader("Accept", "image/jpeg")
+		SetHeader("Accept", "image/jpeg").
+		SetRetryCount(2).
+		SetRetryWaitTime(50 * time.Millisecond)
 
 	transport := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 100,
-		IdleConnTimeout:     90 * time.Second,
+		MaxIdleConns:          50,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   3 * time.Second,
+		ResponseHeaderTimeout: 3 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 	restyClient.SetTransport(transport)
 

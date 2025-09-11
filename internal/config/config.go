@@ -7,6 +7,7 @@ import (
 type Config struct {
 	Authorization Authorization
 	Cameras       Cameras
+	Server        Server
 }
 
 type Authorization struct {
@@ -21,6 +22,12 @@ type Cameras struct {
 	Camera4 string `env:"camera4"`
 	Camera5 string `env:"camera5"`
 	Camera6 string `env:"camera6"`
+}
+
+type Server struct {
+	Port     string `env:"PORT" envDefault:"8081"`
+	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
+	FPS      int    `env:"FPS" envDefault:"10"`
 }
 
 // TODO: Use viper and parse from config.yaml
