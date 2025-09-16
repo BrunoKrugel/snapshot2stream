@@ -25,9 +25,11 @@ type Cameras struct {
 }
 
 type Server struct {
-	Port     string `env:"PORT" envDefault:"8081"`
-	LogLevel string `env:"LOG_LEVEL" envDefault:"info"`
-	FPS      int    `env:"FPS" envDefault:"10"`
+	Port      string `env:"PORT" envDefault:"8081"`
+	LogLevel  string `env:"LOG_LEVEL" envDefault:"info"`
+	FPS       int    `env:"FPS" envDefault:"10"`
+	FetchFPS  int    `env:"FETCH_FPS" envDefault:"30"`
+	UseCache  bool   `env:"USE_CACHE" envDefault:"true"`
 }
 
 // TODO: Use viper and parse from config.yaml
