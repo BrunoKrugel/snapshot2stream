@@ -22,13 +22,14 @@ snapshot2stream bridges this gap by:
 ## Features
 
 - Converts static snapshots to live MJPEG streams
-- High performance with optimized HTTP transport and connection pooling
+- High performance with concurrent goroutine architecture and connection pooling
 - Configurable via environment variables (FPS, port, timeouts)
 - Support for multiple cameras simultaneously
 - Authentication support (cookies and tokens)
 - Automatic reconnection and error handling with exponential backoff
 - Configurable FPS (1-30 FPS, default 10)
-- Optimized memory allocation and reduced syscalls
+- Optimized memory allocation, frame caching, and reduced syscalls
+- Concurrent frame fetching and serving for maximum throughput
 
 ## Usage
 

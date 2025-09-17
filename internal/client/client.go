@@ -11,7 +11,9 @@ import (
 
 type Client struct {
 	restyClient *resty.Client
-	request     *resty.Request
+	authToken   string
+	cookieName  string
+	cookieValue string
 }
 
 func NewRestyClient(cfg *config.Config) *Client {
@@ -21,7 +23,8 @@ func NewRestyClient(cfg *config.Config) *Client {
 		SetHeader("User-Agent", "app/1 CFNetwork/3826.600.41 Darwin/24.6.0").
 		SetHeader("Accept", "image/jpeg").
 		SetRetryCount(2).
-		SetRetryWaitTime(50 * time.Millisecond)
+		SetRetryWaitTime(50 * time.Millisecond).
+		SetDisableWarn(true)
 
 	transport := &http.Transport{
 		MaxIdleConns:          50,
@@ -33,27 +36,31 @@ func NewRestyClient(cfg *config.Config) *Client {
 	}
 	restyClient.SetTransport(transport)
 
-	req := restyClient.R()
-	if cfg.Authorization.Token != "" {
-		req.SetHeader("Authorization", cfg.Authorization.Token)
-	}
-
 	cookieName, cookieValue := parseCookie(cfg.Authorization.Cookie)
-	if cookieValue != "" {
-		req.SetCookie(&http.Cookie{
-			Name:  cookieName,
-			Value: cookieValue,
-		})
-	}
 
 	return &Client{
 		restyClient: restyClient,
-		request:     req,
+		authToken:   cfg.Authorization.Token,
+		cookieName:  cookieName,
+		cookieValue: cookieValue,
 	}
 }
 
 func (c *Client) GetStream(url string) (*resty.Response, error) {
-	return c.request.Get(url)
+	req := c.restyClient.R()
+
+	if c.authToken != "" {
+		req.SetHeader("Authorization", c.authToken)
+	}
+
+	if c.cookieValue != "" {
+		req.SetCookie(&http.Cookie{
+			Name:  c.cookieName,
+			Value: c.cookieValue,
+		})
+	}
+
+	return req.Get(url)
 }
 
 func parseCookie(s string) (name, value string) {

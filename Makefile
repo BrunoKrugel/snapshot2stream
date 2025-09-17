@@ -11,3 +11,7 @@ format:
 .PHONY: update
 update:
 	go get -t -u ./...
+
+.PHONY: lint
+lint:
+	golangci-lint run
