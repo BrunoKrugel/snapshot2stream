@@ -48,18 +48,18 @@ func NewRestyClient(cfg *config.Config) *Client {
 
 func (c *Client) GetStream(url string) (*resty.Response, error) {
 	req := c.restyClient.R()
-	
+
 	if c.authToken != "" {
 		req.SetHeader("Authorization", c.authToken)
 	}
-	
+
 	if c.cookieValue != "" {
 		req.SetCookie(&http.Cookie{
 			Name:  c.cookieName,
 			Value: c.cookieValue,
 		})
 	}
-	
+
 	return req.Get(url)
 }
 
