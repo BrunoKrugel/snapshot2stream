@@ -5,43 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/BrunoKrugel/snapshot2stream/internal/client"
 	"github.com/BrunoKrugel/snapshot2stream/internal/config"
+	"github.com/BrunoKrugel/snapshot2stream/internal/frame"
 	_ "github.com/joho/godotenv/autoload"
 )
-
-// Frame represents a cached camera frame
-type Frame struct {
-	timestamp time.Time
-	data      []byte
-}
-
-// CameraCache holds a ring buffer of frames for smoother playback
-type CameraCache struct {
-	frames    []*Frame
-	writeIndex int
-	readIndex  int
-	size      int
-	mu        sync.RWMutex
-}
-
-func newCameraCache(size int) *CameraCache {
-	return &CameraCache{
-		frames: make([]*Frame, size),
-		size:   size,
-	}
-}
-
-// FrameManager manages frame caching and fetching for all cameras
-type FrameManager struct {
-	caches map[string]*CameraCache
-	client *client.Client
-	ctx    context.Context
-	cancel context.CancelFunc
-}
 
 func main() {
 	cfg, err := config.NewConfig()
@@ -55,12 +25,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	frameManager := &FrameManager{
-		caches: make(map[string]*CameraCache),
-		client: client,
-		ctx:    ctx,
-		cancel: cancel,
-	}
+	frameManager := frame.NewFrameManager(cfg, client)
 
 	cameras := map[string]string{
 		"rua":        cfg.Cameras.Camera1,
@@ -73,10 +38,10 @@ func main() {
 
 	// Initialize caches and start fetchers (only if cache is enabled)
 	for name, url := range cameras {
-		frameManager.caches[name] = newCameraCache(10) // Ring buffer of 10 frames
+		frameManager.Caches[name] = frame.NewCameraCache(10) // Ring buffer of 10 frames
 		if cfg.Server.UseCache {
 			// Start background fetcher for each camera
-			go frameManager.startFetcher(name, url, cfg)
+			go frameManager.StartFetcher(ctx, name, url, cfg)
 		}
 	}
 
@@ -102,104 +67,8 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+cfg.Server.Port, nil))
 }
 
-// startFetcher runs in a goroutine to continuously fetch frames for a camera
-func (fm *FrameManager) startFetcher(cameraName, cameraURL string, cfg *config.Config) {
-	frameInterval := time.Duration(1000/cfg.Server.FetchFPS) * time.Millisecond
-	ticker := time.NewTicker(frameInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-fm.ctx.Done():
-			return
-		case <-ticker.C:
-			fm.fetchFrame(cameraName, cameraURL)
-		}
-	}
-}
-
-// fetchFrame fetches a single frame and updates the cache
-func (fm *FrameManager) fetchFrame(cameraName, cameraURL string) {
-	resp, err := fm.client.GetStream(cameraURL)
-	if err != nil {
-		log.Printf("[%s] request error: %v", cameraName, err)
-		return
-	}
-
-	if resp.RawResponse != nil && resp.RawResponse.Body != nil {
-		defer resp.RawResponse.Body.Close()
-	}
-
-	if resp.StatusCode() != http.StatusOK {
-		log.Printf("[%s] bad status: %s", cameraName, resp.Status())
-		return
-	}
-
-	body := resp.Body()
-	if len(body) == 0 {
-		return
-	}
-
-	// Validate JPEG frame
-	if !isValidJPEG(body) {
-		log.Printf("[%s] invalid JPEG frame, skipping", cameraName)
-		return
-	}
-
-	// Update cache with new frame
-	cache := fm.caches[cameraName]
-	cache.mu.Lock()
-	newFrame := &Frame{
-		data:      make([]byte, len(body)),
-		timestamp: time.Now(),
-	}
-	copy(newFrame.data, body)
-	
-	// Add to ring buffer
-	cache.frames[cache.writeIndex] = newFrame
-	cache.writeIndex = (cache.writeIndex + 1) % cache.size
-	cache.mu.Unlock()
-}
-
-// getLatestFrame returns the latest cached frame for a camera
-func (fm *FrameManager) getLatestFrame(cameraName string) *Frame {
-	cache, exists := fm.caches[cameraName]
-	if !exists {
-		return nil
-	}
-
-	cache.mu.RLock()
-	defer cache.mu.RUnlock()
-	
-	// Get the most recent frame
-	latestIndex := (cache.writeIndex - 1 + cache.size) % cache.size
-	return cache.frames[latestIndex]
-}
-
-// getNextFrame returns the next frame for streaming
-func (fm *FrameManager) getNextFrame(cameraName string) *Frame {
-	cache, exists := fm.caches[cameraName]
-	if !exists {
-		return nil
-	}
-
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	
-	// If we're caught up to write index, return latest
-	if cache.readIndex == cache.writeIndex {
-		latestIndex := (cache.writeIndex - 1 + cache.size) % cache.size
-		return cache.frames[latestIndex]
-	}
-	
-	// Get next frame and advance read index
-	frame := cache.frames[cache.readIndex]
-	cache.readIndex = (cache.readIndex + 1) % cache.size
-	return frame
-}
-
 // streamCameraFromCache serves cached frames to clients
-func streamCameraFromCache(w http.ResponseWriter, r *http.Request, fm *FrameManager, cameraName string, cfg *config.Config) {
+func streamCameraFromCache(w http.ResponseWriter, r *http.Request, fm *frame.FrameManager, cameraName string, cfg *config.Config) {
 	// MJPEG headers
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -228,7 +97,7 @@ func streamCameraFromCache(w http.ResponseWriter, r *http.Request, fm *FrameMana
 		}
 
 		// Get next frame from cache
-		frame := fm.getNextFrame(cameraName)
+		frame := fm.GetNextFrame(cameraName)
 		if frame == nil {
 			// No frame available yet, wait and retry
 			time.Sleep(50 * time.Millisecond)
@@ -238,7 +107,7 @@ func streamCameraFromCache(w http.ResponseWriter, r *http.Request, fm *FrameMana
 		// Build frame header efficiently
 		headerBuf = headerBuf[:0]
 		headerBuf = append(headerBuf, "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "...)
-		headerBuf = append(headerBuf, fmt.Sprintf("%d", len(frame.data))...)
+		headerBuf = append(headerBuf, fmt.Sprintf("%d", len(frame.Data))...)
 		headerBuf = append(headerBuf, "\r\n\r\n"...)
 
 		// Write frame header + image + separator
@@ -247,7 +116,7 @@ func streamCameraFromCache(w http.ResponseWriter, r *http.Request, fm *FrameMana
 			return
 		}
 
-		if _, err := w.Write(frame.data); err != nil {
+		if _, err := w.Write(frame.Data); err != nil {
 			log.Printf("[%s] write body error: %v", cameraName, err)
 			return
 		}
@@ -285,7 +154,7 @@ func isValidJPEG(data []byte) bool {
 }
 
 // streamCameraDirect streams directly from camera without caching
-func streamCameraDirect(w http.ResponseWriter, r *http.Request, fm *FrameManager, cameraName, cameraURL string, cfg *config.Config) {
+func streamCameraDirect(w http.ResponseWriter, r *http.Request, fm *frame.FrameManager, cameraName, cameraURL string, cfg *config.Config) {
 	// MJPEG headers
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -314,7 +183,7 @@ func streamCameraDirect(w http.ResponseWriter, r *http.Request, fm *FrameManager
 		}
 
 		// Fetch frame directly
-		resp, err := fm.client.GetStream(cameraURL)
+		resp, err := fm.Client.GetStream(cameraURL)
 		if err != nil {
 			log.Printf("[%s] request error: %v", cameraName, err)
 			time.Sleep(frameInterval)
@@ -351,18 +220,18 @@ func streamCameraDirect(w http.ResponseWriter, r *http.Request, fm *FrameManager
 		headerBuf = append(headerBuf, "\r\n\r\n"...)
 
 		// Write frame header + image + separator
-		if _, err := w.Write(headerBuf); err != nil {
-			log.Printf("[%s] write header error: %v", cameraName, err)
+		if _, errHeader := w.Write(headerBuf); errHeader != nil {
+			log.Printf("[%s] write header error: %v", cameraName, errHeader)
 			return
 		}
 
-		if _, err := w.Write(body); err != nil {
-			log.Printf("[%s] write body error: %v", cameraName, err)
+		if _, errBody := w.Write(body); errBody != nil {
+			log.Printf("[%s] write body error: %v", cameraName, errBody)
 			return
 		}
 
-		if _, err := w.Write([]byte("\r\n")); err != nil {
-			log.Printf("[%s] write separator error: %v", cameraName, err)
+		if _, errSeparator := w.Write([]byte("\r\n")); errSeparator != nil {
+			log.Printf("[%s] write separator error: %v", cameraName, errSeparator)
 			return
 		}
 
